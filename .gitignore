@@ -1,0 +1,24 @@
+# Local env / package caches
+.cache/
+.conda/
+.mamba/
+.micromamba/
+cache/
+
+# Runtime data and logs
+maa-cache/
+maa-data/
+maa-cron.log
+redroid-data/
+
+# Build artifacts / downloads
+*.apk
+*.tar.gz
+*.xz
+
+# Nested external repo and build output
+redroid-modules/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db

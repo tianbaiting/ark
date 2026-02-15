@@ -1,0 +1,17 @@
+{
+  "tasks": [
+    {
+      "type": "Recruit",
+      "params": {
+        "refresh": false,
+        "select": [4],
+        "confirm": [4, 3],
+        "times": 4,
+        "set_time": true,
+        "expedite": false,
+        "skip_robot": true,
+        "server": "CN"
+      }
+    }
+  ]
+}

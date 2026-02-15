@@ -1,0 +1,27 @@
+services:
+  redroid:
+    image: redroid/redroid:11.0.0-latest
+    container_name: arknights-redroid
+    privileged: true
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./redroid-data:/data
+    command:
+      - "androidboot.redroid_width=1080"
+      - "androidboot.redroid_height=1920"
+      - "androidboot.redroid_dpi=480"
+
+  maa:
+    build:
+      context: ./maa
+    container_name: maa-cli
+    network_mode: host
+    environment:
+      - ADB_SERVER_SOCKET=tcp:127.0.0.1:5037
+      - ADB_CONNECT=0
+    volumes:
+      - ./maa-config:/root/.config/maa
+      - ./maa-cache:/root/.cache/maa
+      - ./maa-data:/root/.local/share/maa

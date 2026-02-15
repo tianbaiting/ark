@@ -1,0 +1,11 @@
+[connection]
+preset = "ADB"
+address = "RF8N316396H"
+config = "General"
+adb_path = "adb"
+
+[instance_options]
+adb_lite_enabled = false
+deployment_with_pause = false
+kill_adb_on_exit = false
+touch_mode = "MaaTouch"

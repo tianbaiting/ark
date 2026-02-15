@@ -1,0 +1,18 @@
+{
+  "tasks": [
+    {
+      "type": "Mall",
+      "params": {
+        "visit_friends": true,
+        "shopping": true,
+        "buy_first": ["招聘许可", "龙门币"],
+        "blacklist": ["家具零件"],
+        "force_shopping_if_credit_full": false,
+        "only_buy_discount": false,
+        "reserve_max_credit": false,
+        "credit_fight": false,
+        "formation_index": 0
+      }
+    }
+  ]
+}
