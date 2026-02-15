@@ -18,12 +18,35 @@ PLAN_SRC="${ROOT}/${INFRAST_PLAN_FILE}"
 PLAN_DST="${ROOT}/maa-config/infrast/${INFRAST_PLAN_FILE}"
 INFRAST_TASK_NAME="infrast"
 FALLBACK_INFRAST_TASK_NAME="infrast_default"
+ORIG_STAY_ON="0"
+TEMP_STAY_ON_SET=0
+SLEEP_SCREEN_ON_EXIT=0
 
 cd "${ROOT}"
 
 timestamp() {
   date "+%F %T"
 }
+
+# Restore temporary display settings on any exit path.
+cleanup() {
+  local rc=$?
+  trap - EXIT
+
+  if [ "${TEMP_STAY_ON_SET}" -eq 1 ]; then
+    ${ADB} -s "${ADB_SERIAL}" shell settings put global stay_on_while_plugged_in "${ORIG_STAY_ON}" >/dev/null 2>&1 || true
+    echo "$(timestamp) restored stay_on_while_plugged_in=${ORIG_STAY_ON}" >>"${LOG}"
+  fi
+
+  if [ "${SLEEP_SCREEN_ON_EXIT}" -eq 1 ]; then
+    ${ADB} -s "${ADB_SERIAL}" shell input keyevent 223 >/dev/null 2>&1 || true
+    echo "$(timestamp) requested screen sleep on exit" >>"${LOG}"
+  fi
+
+  exit "${rc}"
+}
+
+trap cleanup EXIT
 
 # Prevent overlapping runs from cron/manual execution.
 exec 9>"${LOCK_FILE}"
@@ -116,7 +139,16 @@ fi
 # Normalize display and keep screen awake to reduce OCR/interaction failures.
 ${ADB} -s "${ADB_SERIAL}" shell wm size 1080x1920 >/dev/null 2>&1 || true
 ${ADB} -s "${ADB_SERIAL}" shell wm density 480 >/dev/null 2>&1 || true
+
+# Keep screen awake only during this run, then restore original value in cleanup().
+ORIG_STAY_ON="$(${ADB} -s "${ADB_SERIAL}" shell settings get global stay_on_while_plugged_in 2>/dev/null | tr -d '\r' || true)"
+if ! [[ "${ORIG_STAY_ON}" =~ ^[0-9]+$ ]]; then
+  ORIG_STAY_ON="0"
+fi
 ${ADB} -s "${ADB_SERIAL}" shell settings put global stay_on_while_plugged_in 3 >/dev/null 2>&1 || true
+TEMP_STAY_ON_SET=1
+SLEEP_SCREEN_ON_EXIT=1
+
 ${ADB} -s "${ADB_SERIAL}" shell input keyevent 224 >/dev/null 2>&1 || true
 ${ADB} -s "${ADB_SERIAL}" shell input keyevent 82 >/dev/null 2>&1 || true
 ${ADB} -s "${ADB_SERIAL}" shell input swipe 540 1600 540 400 300 >/dev/null 2>&1 || true
@@ -143,5 +175,4 @@ run_step "maa run award" 0 run_maa run award -a "${ADB_SERIAL}" --batch
 run_step "maa run recruit" 0 run_maa run recruit -a "${ADB_SERIAL}" --batch
 run_step "maa run mall" 0 run_maa run mall -a "${ADB_SERIAL}" --batch
 run_step "maa fight TA-9" 0 run_maa fight TA-9 -a "${ADB_SERIAL}" --expiring-medicine 99 --series 0 --batch
-
 exit ${FAILED}
