@@ -18,6 +18,9 @@ services:
       context: ./maa
     container_name: maa-cli
     network_mode: host
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     environment:
       - ADB_SERVER_SOCKET=tcp:127.0.0.1:5037
       - ADB_CONNECT=0
@@ -25,3 +28,9 @@ services:
       - ./maa-config:/root/.config/maa
       - ./maa-cache:/root/.cache/maa
       - ./maa-data:/root/.local/share/maa
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
