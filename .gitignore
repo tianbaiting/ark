@@ -19,6 +19,10 @@ redroid-data/
 # Nested external repo and build output
 redroid-modules/
 
+# Python bytecode caches
+__pycache__/
+*.pyc
+
 # Editor / OS noise
 .DS_Store
 Thumbs.db
