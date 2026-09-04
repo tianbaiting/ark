@@ -68,6 +68,54 @@ Opening mini games:
         self.assertEqual(elapsed, 8)
         self.assertFalse(reopen)
 
+    def test_discovers_current_manifest_event_when_cli_activity_is_stale(self) -> None:
+        manifest = {
+            "Official": {
+                "sideStoryStage": {
+                    "SR": {
+                        "Activity": {
+                            "Tip": "SideStory「月行水上」",
+                            "UtcStartTime": "2026/09/04 12:00:00",
+                            "UtcExpireTime": "2026/09/18 03:59:59",
+                            "TimeZone": 8,
+                        },
+                        "Stages": [{"Value": "SR-8"}, {"Value": "SR-5"}],
+                    }
+                }
+            }
+        }
+        events = MODULE.discover_active_events(
+            "Opening side story stages:\n",
+            manifest,
+            "Official",
+            datetime(2026, 9, 4, 9, tzinfo=timezone.utc),
+        )
+        self.assertEqual(events, [MODULE.ActiveEvent("SideStory「月行水上」", "SR")])
+
+    def test_does_not_discover_expired_manifest_event(self) -> None:
+        manifest = {
+            "Official": {
+                "sideStoryStage": {
+                    "XY": {
+                        "Activity": {
+                            "Tip": "SideStory old",
+                            "UtcStartTime": "2026/08/01 12:00:00",
+                            "UtcExpireTime": "2026/08/10 03:59:59",
+                            "TimeZone": 8,
+                        },
+                        "Stages": [{"Value": "XY-8"}],
+                    }
+                }
+            }
+        }
+        events = MODULE.discover_active_events(
+            "",
+            manifest,
+            "Official",
+            datetime(2026, 9, 4, 9, tzinfo=timezone.utc),
+        )
+        self.assertEqual(events, [])
+
     def test_prefers_owned_compatible_job_before_failed_job(self) -> None:
         target = MODULE.StageTarget("event", "title", "XY-1", "act_01", False, 0, (0, 1, 0))
         candidates = [
@@ -93,6 +141,49 @@ Opening mini games:
         self.assertIsNotNone(choice)
         self.assertEqual(choice[0]["id"], 2)
         self.assertEqual(choice[2], 0)
+
+    def test_skips_job_that_explicitly_requires_manual_intervention(self) -> None:
+        target = MODULE.StageTarget(
+            "event", "title", "XY-1", "act_01", False, 0, (0, 1, 0)
+        )
+        candidates = [
+            {
+                "id": 1,
+                "type": "PRTS",
+                "available": True,
+                "hot_score": 100,
+                "like": 1000,
+                "content": '{"stage_name":"act_01","doc":{"details":"本关没办法自动，需要手动选择"}}',
+            },
+            {
+                "id": 2,
+                "type": "PRTS",
+                "available": True,
+                "hot_score": 1,
+                "like": 1,
+                "content": '{"stage_name":"act_01","doc":{"details":"稳定挂机"}}',
+            },
+        ]
+        choice = MODULE.choose_candidate(candidates, target, {}, {})
+        self.assertIsNotNone(choice)
+        self.assertEqual(choice[0]["id"], 2)
+
+    def test_penalizes_unverifiable_module_requirements(self) -> None:
+        base = {"stage_name": "act_01", "doc": {}, "groups": []}
+        no_module = {**base, "opers": [{"name": "A", "requirements": {"module": -1}}]}
+        three_modules = {
+            **base,
+            "opers": [
+                {"name": "A", "requirements": {"module": 1}},
+                {"name": "B", "requirements": {"module": 2}},
+                {"name": "C", "requirements": {"module": 1}},
+            ],
+        }
+        candidate = {"like": 10, "dislike": 0, "hot_score": 0}
+        self.assertGreater(
+            MODULE.candidate_score(candidate, no_module),
+            MODULE.candidate_score(candidate, three_modules),
+        )
 
     def test_success_result_persists_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

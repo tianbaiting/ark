@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -22,6 +22,15 @@ from typing import Any, Iterable
 DEFAULT_API = "https://prts.maa.plus"
 POSITIVE_WORDS = ("稳定", "挂机", "一摆到底", "低配", "单核", "少人")
 RISK_WORDS = ("不稳定", "概率", "凹", "手动编队", "需要补人", "漏怪", "慎用", "失败重开")
+UNATTENDED_BLOCKERS = (
+    "没办法自动",
+    "无法自动",
+    "不能自动",
+    "需手动",
+    "需要手动",
+    "手动选",
+    "手动操作",
+)
 STAGE_CODE_RE = re.compile(r"^([A-Z][A-Z0-9]*)-(?:(EX|S)-)?(\d+)$")
 
 
@@ -103,11 +112,64 @@ def write_json_atomic(path: Path, value: Any) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def parse_manifest_start(value: str) -> datetime | None:
+def parse_manifest_start(value: str, time_zone: int | float | str = 0) -> datetime | None:
     try:
-        return datetime.strptime(value, "%Y/%m/%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except (TypeError, ValueError):
+        offset = float(time_zone or 0)
+        local_zone = timezone(timedelta(hours=offset))
+        return (
+            datetime.strptime(value, "%Y/%m/%d %H:%M:%S")
+            .replace(tzinfo=local_zone)
+            .astimezone(timezone.utc)
+        )
+    except (TypeError, ValueError, OverflowError):
         return None
+
+
+def discover_manifest_events(
+    manifest: dict[str, Any], client: str, now: datetime
+) -> list[ActiveEvent]:
+    side_stories = manifest.get(client, {}).get("sideStoryStage", {})
+    if not isinstance(side_stories, dict):
+        return []
+
+    current = now.astimezone(timezone.utc)
+    discovered: set[tuple[str, str]] = set()
+    for entry in side_stories.values():
+        if not isinstance(entry, dict):
+            continue
+        activity = entry.get("Activity", {})
+        if not isinstance(activity, dict):
+            continue
+        time_zone = activity.get("TimeZone", 0)
+        start = parse_manifest_start(activity.get("UtcStartTime", ""), time_zone)
+        expire = parse_manifest_start(activity.get("UtcExpireTime", ""), time_zone)
+        if start is None or expire is None or current < start or current > expire:
+            continue
+
+        title = str(activity.get("Tip") or activity.get("StageName") or "").strip()
+        if not title:
+            continue
+        for stage in entry.get("Stages", []):
+            if not isinstance(stage, dict):
+                continue
+            value = stage.get("Value")
+            if not isinstance(value, str):
+                continue
+            match = STAGE_CODE_RE.match(value)
+            if match:
+                discovered.add((title, match.group(1)))
+
+    return [ActiveEvent(title, prefix) for title, prefix in sorted(discovered)]
+
+
+def discover_active_events(
+    activity_text: str, manifest: dict[str, Any], client: str, now: datetime
+) -> list[ActiveEvent]:
+    events = parse_active_events(activity_text) + discover_manifest_events(manifest, client, now)
+    unique: dict[tuple[str, str], ActiveEvent] = {}
+    for event in events:
+        unique[(event.title, event.prefix)] = event
+    return list(unique.values())
 
 
 def manifest_identity(
@@ -138,7 +200,7 @@ def manifest_identity(
         if not isinstance(activity, dict):
             activity = {}
         start_text = activity.get("UtcStartTime", "")
-        start = parse_manifest_start(start_text)
+        start = parse_manifest_start(start_text, activity.get("TimeZone", 0))
         elapsed_days = max(0, int((now - start).total_seconds() // 86400)) if start else 0
         event_id = f"{event.prefix}:{manifest_key}:{start_text or event.title}"
         is_reopen = str(manifest_key).lower().startswith("ssreopen") or "复刻" in event.title
@@ -300,8 +362,35 @@ def candidate_score(candidate: dict[str, Any], content: dict[str, Any]) -> float
     dislikes = safe_float(candidate.get("dislike", 0))
     hot_score = safe_float(candidate.get("hot_score", 0))
     fixed_count = len([oper for oper in content.get("opers", []) if isinstance(oper, dict)])
+    module_slots = required_module_slots(content)
     approval = (likes + 1.0) / (likes + dislikes + 2.0)
-    return hot_score + 2.0 * math.log1p(likes) + 8.0 * approval + 2.5 * positive - 5.0 * risky - 0.4 * fixed_count
+    return (
+        hot_score
+        + 2.0 * math.log1p(likes)
+        + 8.0 * approval
+        + 2.5 * positive
+        - 5.0 * risky
+        - 0.4 * fixed_count
+        - 1.5 * module_slots
+    )
+
+
+def required_module_slots(content: dict[str, Any]) -> int:
+    def required(oper: dict[str, Any]) -> int:
+        requirements = oper.get("requirements", {})
+        if not isinstance(requirements, dict):
+            return 0
+        return int(safe_int(requirements.get("module", -1)) > 0)
+
+    fixed = sum(required(oper) for oper in content.get("opers", []) if isinstance(oper, dict))
+    groups = 0
+    for group in content.get("groups", []):
+        if not isinstance(group, dict):
+            continue
+        alternatives = [oper for oper in group.get("opers", []) if isinstance(oper, dict)]
+        if alternatives:
+            groups += min(required(oper) for oper in alternatives)
+    return fixed + groups
 
 
 def query_candidates(api: str, target: StageTarget, timeout: int, retries: int) -> list[dict[str, Any]]:
@@ -338,6 +427,11 @@ def choose_candidate(
             continue
         if content.get("type") == "SSS":
             continue
+        document = content.get("doc", {})
+        if isinstance(document, dict):
+            searchable = f"{document.get('title', '')}\n{document.get('details', '')}"
+            if any(blocker in searchable for blocker in UNATTENDED_BLOCKERS):
+                continue
         missing = missing_slots(content, owned)
         if missing > 1:
             continue
@@ -385,11 +479,12 @@ def event_state(state: dict[str, Any], event_id: str) -> dict[str, Any]:
 
 def plan(args: argparse.Namespace) -> int:
     activity_text = args.activity_file.read_text(encoding="utf-8", errors="replace")
-    active_events = parse_active_events(activity_text)
+    manifest = read_json(args.activity_manifest, {})
+    now = datetime.now(timezone.utc)
+    active_events = discover_active_events(activity_text, manifest, args.client, now)
     if not active_events:
         return 0
 
-    manifest = read_json(args.activity_manifest, {})
     state = read_json(args.state, {"schema": 1, "events": {}})
     if not isinstance(state, dict):
         state = {"schema": 1, "events": {}}
@@ -399,7 +494,6 @@ def plan(args: argparse.Namespace) -> int:
     if not isinstance(levels, list):
         raise RuntimeError("stage API returned no level list")
 
-    now = datetime.now(timezone.utc)
     scope = {part.strip().lower() for part in args.scope.split(",") if part.strip()}
     for active_event in active_events:
         event_id, elapsed_days, is_reopen = manifest_identity(manifest, args.client, active_event, now)
