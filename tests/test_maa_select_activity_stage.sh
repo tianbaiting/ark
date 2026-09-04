@@ -45,11 +45,14 @@ assert_selects "BB-5" 'Opening side story stages:
   - BB-8: Loxic Kohl
   - BB-5: 0.7 Orundum per sanity'
 
-assert_no_selection 'Opening side story stages:
+assert_selects "MT-10" 'Opening side story stages:
 - SideStory「众生行记」复刻
   - MT-10: 化合切削液
   - MT-9: 研磨石
   - MT-8: 酮凝集组'
+
+assert_no_selection 'Opening mini games:
+- AT-相谈室'
 
 rm -f /tmp/maa_select_stage_test.out /tmp/maa_select_stage_test.err
 printf "PASS\n"

@@ -100,6 +100,7 @@ trap cleanup EXIT
 set +e
 timeout --signal=INT --kill-after=30s 30m \
   ${DOCKER:-docker} compose run --rm maa maa run depot -a "${SERIAL}" --batch \
+  -v \
   >"${raw_output}" 2>&1
 rc=$?
 set -e
@@ -111,54 +112,9 @@ if [ "${rc}" -ne 0 ]; then
   exit "${rc}"
 fi
 
-items_json="$(python3 -c "
-import sys, json, re
-
-with open('${raw_output}') as f:
-    text = f.read()
-
-done_data = None
-for line in text.splitlines():
-    if 'DepotInfo' not in line:
-        continue
-    m = re.search(r'\"data\"\s*:\s*\"(\{[^\"]*\})\"', line)
-    if m:
-        try:
-            done_data = json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
-
-if not done_data:
-    for m in re.finditer(r'\{\"[0-9]+\":\s*\d+(?:,\s*\"[0-9]+\":\s*\d+)*\}', text):
-        try:
-            done_data = json.loads(m.group(0))
-            break
-        except json.JSONDecodeError:
-            pass
-
-if not done_data:
-    print('{}', end='')
-    sys.exit(1)
-
-print(json.dumps(done_data, sort_keys=True), end='')
-" 2>>"${LOG}")"
-parse_rc=$?
-
-if [ "${parse_rc}" -ne 0 ] || [ "${items_json}" = "{}" ]; then
+if ! python3 "${ROOT}/scripts/extract_maa_inventory.py" depot "${raw_output}" "${CACHE}" 2>>"${LOG}"; then
   echo "$(timestamp) scan_depot: failed to parse depot data from output" >>"${LOG}"
   exit 1
 fi
-
-python3 -c "
-import json, datetime
-data = json.loads('${items_json}')
-cache = {
-    'timestamp': datetime.datetime.now().isoformat(),
-    'items': data
-}
-with open('${CACHE}', 'w') as f:
-    json.dump(cache, f, indent=2, ensure_ascii=False)
-print(f'wrote {len(data)} items to ${CACHE}')
-" >>"${LOG}" 2>&1
 
 echo "$(timestamp) scan_depot: done" >>"${LOG}"

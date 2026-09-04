@@ -689,42 +689,14 @@ if [ "${cache_age_days:-999}" -ge "${DEPOT_SCAN_INTERVAL_DAYS}" ]; then
   echo "$(timestamp) depot cache stale (${cache_age_days:-N/A} days >= ${DEPOT_SCAN_INTERVAL_DAYS}), scanning..." >>"${LOG}"
   depot_raw="${TMPDIR:-/tmp}/maa_depot_$$.txt"
   set +e
-  run_maa_with_timeout "${DEFAULT_STEP_TIMEOUT}" run depot -a "${ADB_SERIAL}" --batch >"${depot_raw}" 2>&1
+  run_maa_with_timeout "${DEFAULT_STEP_TIMEOUT}" run depot -a "${ADB_SERIAL}" --batch -v >"${depot_raw}" 2>&1
   depot_rc=$?
   set -e
   cat "${depot_raw}" >>"${LOG}"
   echo "$(timestamp) maa depot scan end rc=${depot_rc}" >>"${LOG}"
   if [ "${depot_rc}" -eq 0 ]; then
-    python3 -c "
-import json, re, datetime, sys
-with open('${depot_raw}') as f:
-    text = f.read()
-items = None
-for line in text.splitlines():
-    if 'DepotInfo' not in line:
-        continue
-    m = re.search(r'\"data\"\s*:\s*\"(\{[^\"]*\})\"', line)
-    if m:
-        try:
-            items = json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
-if not items:
-    for m in re.finditer(r'\{\"[0-9]+\":\s*\d+(?:,\s*\"[0-9]+\":\s*\d+)*\}', text):
-        try:
-            items = json.loads(m.group(0))
-            break
-        except json.JSONDecodeError:
-            pass
-if items:
-    cache = {'timestamp': datetime.datetime.now().isoformat(), 'items': items}
-    with open('${DEPOT_CACHE}', 'w') as f:
-        json.dump(cache, f, indent=2, ensure_ascii=False)
-    print(f'depot cache updated: {len(items)} items', file=sys.stderr)
-else:
-    print('depot scan completed but no items parsed', file=sys.stderr)
-    sys.exit(1)
-" 2>>"${LOG}" || echo "$(timestamp) depot scan: no items parsed from output" >>"${LOG}"
+    python3 "${ROOT}/scripts/extract_maa_inventory.py" depot "${depot_raw}" "${DEPOT_CACHE}" \
+      2>>"${LOG}" || echo "$(timestamp) depot scan: no completed inventory callback parsed" >>"${LOG}"
   fi
   rm -f "${depot_raw}"
 else
