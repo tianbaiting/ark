@@ -38,12 +38,13 @@ class ExtractMaaInventoryTest(unittest.TestCase):
   "taskchain": "OperBox",
   "details": {
     "done": true,
-    "all_oper": [{"id":"char_1","name":"能天使","own":true,"rarity":6}],
+    "all_opers": [{"id":"char_1","name":"能天使","own":true,"rarity":6}],
     "own_opers": [{"id":"char_1","name":"能天使","own":true,"elite":2,"level":90,"potential":1,"rarity":6}]
   }
 }
 """
         result = MODULE.extract_operbox(log)
+        self.assertEqual(result["all_opers"][0]["name"], "能天使")
         self.assertEqual(result["own_opers"][0]["name"], "能天使")
 
     def test_atomic_output_is_valid_json(self) -> None:
@@ -51,6 +52,10 @@ class ExtractMaaInventoryTest(unittest.TestCase):
             output = Path(directory) / "cache.json"
             MODULE.write_atomic(output, {"timestamp": "test", "items": {"30011": 2}})
             self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["items"]["30011"], 2)
+
+    def test_accepts_legacy_operbox_field_name(self) -> None:
+        log = '[INFO] OperBox: {"details":{"done":true,"all_oper":[],"own_opers":[]}}'
+        self.assertEqual(MODULE.extract_operbox(log), {"all_opers": [], "own_opers": []})
 
     def test_rejects_incomplete_log(self) -> None:
         with self.assertRaises(ValueError):

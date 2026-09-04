@@ -84,11 +84,12 @@ def extract_operbox(text: str) -> dict[str, list[dict[str, Any]]]:
         if details is None:
             continue
 
-        all_oper = details.get("all_oper")
+        # [EN] Core 6.17 renamed the callback field to all_opers; accept the legacy spelling for older installations. / [CN] Core 6.17 将回调字段改为 all_opers；同时兼容旧版本的字段名。
+        all_opers = details.get("all_opers", details.get("all_oper"))
         own_opers = details.get("own_opers")
-        if isinstance(all_oper, list) and isinstance(own_opers, list):
+        if isinstance(all_opers, list) and isinstance(own_opers, list):
             result = {
-                "all_oper": [entry for entry in all_oper if isinstance(entry, dict)],
+                "all_opers": [entry for entry in all_opers if isinstance(entry, dict)],
                 "own_opers": [entry for entry in own_opers if isinstance(entry, dict)],
             }
 
