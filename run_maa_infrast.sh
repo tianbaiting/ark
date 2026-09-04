@@ -36,6 +36,8 @@ AUTO_COPILOT_SCOPE="${AUTO_COPILOT_SCOPE:-normal,ex,s}"
 AUTO_COPILOT_EX_DELAY_DAYS="${AUTO_COPILOT_EX_DELAY_DAYS:-7}"
 AUTO_COPILOT_S_DELAY_DAYS="${AUTO_COPILOT_S_DELAY_DAYS:-14}"
 AUTO_COPILOT_FORMATION_INDEX="${AUTO_COPILOT_FORMATION_INDEX:-4}"
+# [EN] Claim the current SR event mission and tarot rewards after farming. / [CN] 刷图后领取当前 SR 活动任务与塔罗牌阵奖励。
+ENABLE_SR_EVENT_REWARDS="${ENABLE_SR_EVENT_REWARDS:-true}"
 
 # 日志阈值：超过就把 maa-cron.log 轮换成 maa-cron.log.1。
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-$((20 * 1024 * 1024))}"
@@ -50,6 +52,7 @@ AUTO_COPILOT_STATE="${ROOT}/auto_copilot_state.json"
 AUTO_COPILOT_DOWNLOAD_DIR="${ROOT}/maa-cache/auto-copilot"
 AUTO_COPILOT_CONTAINER_DIR="/root/.cache/maa/auto-copilot"
 AUTO_COPILOT_RESULT_VERIFIER="${ROOT}/scripts/verify_maa_copilot_result.py"
+SR_EVENT_REWARD_CLAIMER="${ROOT}/scripts/claim_sr_event_rewards.py"
 ACTIVITY_MANIFEST="${ROOT}/maa-cache/StageActivityV2.json"
 TESSERACT="${TESSERACT:-/home/linuxbrew/.linuxbrew/bin/tesseract}"
 # [EN] Read the device address from the profile so cron cannot silently drift to an obsolete serial. / [CN] 从配置档读取设备地址，避免 cron 静默使用已过期的序列号。
@@ -778,6 +781,24 @@ run_auto_copilot() {
   return 0
 }
 
+run_sr_event_rewards() {
+  local rc=0
+
+  if [ "${ENABLE_SR_EVENT_REWARDS}" != "true" ]; then
+    return 0
+  fi
+
+  set +e
+  run_step_soft "claim SR event rewards" \
+    python3 "${SR_EVENT_REWARD_CLAIMER}" --adb "${ADB}" --serial "${ADB_SERIAL}"
+  rc=$?
+  set -e
+  if [ "${rc}" -ne 0 ]; then
+    echo "$(timestamp) SR event reward claim skipped or incomplete rc=${rc}" >>"${LOG}"
+  fi
+  return 0
+}
+
 wait_for_adb_device() {
   local attempt=1
   local state=""
@@ -863,7 +884,7 @@ fi
 # If dry-run check fails, still force custom task instead of fallback.
 select_infrast_task
 
-# [EN] Execution order: startup -> inventory scans?(if stale) -> infrast -> award -> recruit -> mall -> annihilation?(Mon/Tue) -> event copilot? -> fight -> closedown. / [CN] 执行顺序：启动 -> 库存扫描?(过期才跑) -> 基建 -> 奖励 -> 公招 -> 信用 -> 剿灭?(周一/二) -> 活动抄作业? -> 刷图 -> 关闭。
+# [EN] Execution order: startup -> inventory scans? -> daily tasks -> annihilation? -> event copilot? -> fight -> event rewards -> closedown. / [CN] 执行顺序：启动 -> 库存扫描? -> 日常任务 -> 剿灭? -> 活动抄作业? -> 刷图 -> 活动领奖 -> 关闭。
 run_step "maa run startup_no_launch" 1 run_maa_with_timeout "${STARTUP_TIMEOUT}" run startup_no_launch -a "${ADB_SERIAL}" --batch
 
 scan_inventory_if_stale depot depot "${DEPOT_CACHE}" "${DEPOT_SCAN_INTERVAL_DAYS}"
@@ -877,6 +898,7 @@ run_weekly_annihilation
 run_auto_copilot
 resolve_fight_stage
 run_fight_with_fallback
+run_sr_event_rewards
 
 # Graceful shutdown: maa closedown 走游戏内退出流程；am force-stop 兜底防止后台残留。
 run_step "maa closedown" 0 run_maa closedown Official -a "${ADB_SERIAL}" --batch
