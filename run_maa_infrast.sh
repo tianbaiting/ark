@@ -36,7 +36,8 @@ ADB="/usr/bin/adb"
 DOCKER="/usr/bin/docker"
 LOG="${ROOT}/maa-cron.log"
 FAILED=0
-LOCK_FILE="/tmp/run_maa_infrast.lock"
+# [EN] Share one lock with update jobs so MaaCore resources are never replaced while a task is running. / [CN] 与更新任务共用同一把锁，避免任务运行时替换 MaaCore 资源。
+LOCK_FILE="${MAA_AUTOMATION_LOCK_FILE:-/tmp/maa_automation.lock}"
 PID_FILE="/tmp/run_maa_infrast.pid"
 SCREEN_OFF_POCKET_STATE_FILE="/tmp/run_maa_infrast.screen_off_pocket"
 LOCK_BUSY_RC=200
