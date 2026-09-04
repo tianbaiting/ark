@@ -1,0 +1,43 @@
+{
+  "tasks": [
+    {
+      "type": "SingleStep",
+      "params": {
+        "type": "copilot",
+        "subtype": "stage",
+        "details": {
+          "stage_name": "act54side_04"
+        }
+      }
+    },
+    {
+      "type": "SingleStep",
+      "params": {
+        "type": "copilot",
+        "subtype": "action",
+        "details": {
+          "actions": [
+            {
+              "type": "Deploy",
+              "name": "圣聆初雪",
+              "location": [2, 3],
+              "direction": "Right"
+            },
+            {
+              "type": "Deploy",
+              "name": "娜仁图亚",
+              "location": [8, 3],
+              "direction": "Down"
+            },
+            {
+              "type": "SpeedUp"
+            },
+            {
+              "type": "SkillDaemon"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
