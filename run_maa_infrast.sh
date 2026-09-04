@@ -66,6 +66,8 @@ SELF_LOCKED_ENV="RUN_MAA_INFRAST_LOCKED"
 STARTUP_TIMEOUT="${STARTUP_TIMEOUT:-30m}"
 CHILD_STOP_GRACE_SECONDS="${CHILD_STOP_GRACE_SECONDS:-20}"
 STOP_WAIT_SECONDS="${STOP_WAIT_SECONDS:-30}"
+ADB_READY_RETRIES="${ADB_READY_RETRIES:-3}"
+ADB_RETRY_DELAY_SECONDS="${ADB_RETRY_DELAY_SECONDS:-5}"
 # Default to resetting display overrides so the phone returns to system resolution after exit.
 # 默认退出时重置显示覆盖参数，避免脚本结束后手机仍停留在临时分辨率。
 DISPLAY_RESTORE_MODE="${DISPLAY_RESTORE_MODE:-reset}"
@@ -762,16 +764,36 @@ run_auto_copilot() {
   return 0
 }
 
+wait_for_adb_device() {
+  local attempt=1
+  local state=""
+
+  while [ "${attempt}" -le "${ADB_READY_RETRIES}" ]; do
+    ${ADB} start-server >/dev/null 2>&1 || true
+    state="$(${ADB} -s "${ADB_SERIAL}" get-state 2>/dev/null || true)"
+    if [ "${state}" = "device" ]; then
+      return 0
+    fi
+
+    echo "$(timestamp) adb not ready attempt=${attempt}/${ADB_READY_RETRIES} state=${state:-none}" >>"${LOG}"
+    # [EN] Ask ADB to renegotiate an offline transport before the next bounded check. / [CN] 在下一次有限检查前，让 ADB 重新协商离线传输连接。
+    ${ADB} -s "${ADB_SERIAL}" reconnect >/dev/null 2>&1 || true
+    if [ "${attempt}" -lt "${ADB_READY_RETRIES}" ]; then
+      sleep "${ADB_RETRY_DELAY_SECONDS}"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
+
 # Make sure adb daemon is ready.
 if [ -z "${ADB_SERIAL}" ]; then
   echo "$(timestamp) adb device address missing in ${PROFILE_FILE}" >>"${LOG}"
   exit 2
 fi
-${ADB} start-server >/dev/null 2>&1 || true
-
-state="$(${ADB} -s "${ADB_SERIAL}" get-state 2>/dev/null || true)"
-if [ "${state}" != "device" ]; then
-  echo "$(timestamp) adb device not ready: ${state:-none}" >>"${LOG}"
+if ! wait_for_adb_device; then
+  echo "$(timestamp) adb device not ready after ${ADB_READY_RETRIES} attempts: serial=${ADB_SERIAL}" >>"${LOG}"
   exit 1
 fi
 

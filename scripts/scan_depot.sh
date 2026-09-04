@@ -2,7 +2,9 @@
 set -euo pipefail
 
 ROOT="/home/tian/ark"
-SERIAL="${1:-RF8N316396H}"
+PROFILE_FILE="${ROOT}/maa-config/profiles/default.toml"
+# [EN] Keep manual scans on the same device as scheduled automation. / [CN] 手动扫描与定时自动化统一使用同一台设备。
+SERIAL="${1:-$(sed -n 's/^[[:space:]]*address[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${PROFILE_FILE}" | head -n1)}"
 CACHE="${ROOT}/depot_cache.json"
 LOG="${ROOT}/maa-cron.log"
 ADB="${ADB:-/usr/bin/adb}"
