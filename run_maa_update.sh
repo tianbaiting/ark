@@ -124,7 +124,16 @@ hot-update | hot | resource | resources)
   run_with_retry "maa hot-update" run_maa_hot_update
   rc=$?
   ;;
-update | full)
+update | core)
+  # [EN] Daily Core updates keep hot-updated resources compatible without rebuilding the unchanged CLI image. / [CN] 每日更新 Core 可保持热更新资源兼容，同时避免重复重建未变化的 CLI 镜像。
+  run_with_retry "maa core update" run_maa_update
+  rc=$?
+  if [ "${rc}" -eq 0 ]; then
+    verify_installation
+    rc=$?
+  fi
+  ;;
+full)
   # [EN] Rebuild first to update maa-cli, then update Core/resources and reject an incompatible installation. / [CN] 先重建镜像更新 maa-cli，再更新 Core/资源并拒绝不兼容的安装结果。
   run_logged "maa image rebuild" \
     timeout --signal=INT --kill-after=30s "${BUILD_TIMEOUT}" \
