@@ -9,6 +9,9 @@ cache/
 maa-cache/
 maa-data/
 maa-cron.log
+depot_cache.json
+operbox_cache.json
+auto_copilot_state.json
 redroid-data/
 
 # Build artifacts / downloads

@@ -27,6 +27,15 @@ FIGHT_TIMEOUT="${FIGHT_TIMEOUT:-3h}"
 
 # 仓库扫描缓存过期天数：超过就重新扫描。
 DEPOT_SCAN_INTERVAL_DAYS="${DEPOT_SCAN_INTERVAL_DAYS:-7}"
+# [EN] Operator ownership changes slowly, so a biweekly scan is enough for copilot compatibility matching. / [CN] 干员持有情况变化较慢，每两周扫描一次即可用于作业兼容性匹配。
+OPERBOX_SCAN_INTERVAL_DAYS="${OPERBOX_SCAN_INTERVAL_DAYS:-14}"
+
+# [EN] Clear at most one pending event stage per scheduled run before spending the remaining sanity. / [CN] 每轮定时任务最多首通一个活动关卡，再消耗剩余理智。
+ENABLE_AUTO_COPILOT="${ENABLE_AUTO_COPILOT:-true}"
+AUTO_COPILOT_SCOPE="${AUTO_COPILOT_SCOPE:-normal,ex,s}"
+AUTO_COPILOT_EX_DELAY_DAYS="${AUTO_COPILOT_EX_DELAY_DAYS:-7}"
+AUTO_COPILOT_S_DELAY_DAYS="${AUTO_COPILOT_S_DELAY_DAYS:-14}"
+AUTO_COPILOT_FORMATION_INDEX="${AUTO_COPILOT_FORMATION_INDEX:-4}"
 
 # 日志阈值：超过就把 maa-cron.log 轮换成 maa-cron.log.1。
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-$((20 * 1024 * 1024))}"
@@ -34,10 +43,18 @@ MAX_LOG_BYTES="${MAX_LOG_BYTES:-$((20 * 1024 * 1024))}"
 
 # Project-local runtime settings.
 ROOT="/home/tian/ark"
+PROFILE_FILE="${ROOT}/maa-config/profiles/default.toml"
 DEPOT_CACHE="${ROOT}/depot_cache.json"
-ADB_SERIAL="RF8N316396H"
+OPERBOX_CACHE="${ROOT}/operbox_cache.json"
+AUTO_COPILOT_STATE="${ROOT}/auto_copilot_state.json"
+AUTO_COPILOT_DOWNLOAD_DIR="${ROOT}/maa-cache/auto-copilot"
+AUTO_COPILOT_CONTAINER_DIR="/root/.cache/maa/auto-copilot"
+ACTIVITY_MANIFEST="${ROOT}/maa-cache/StageActivityV2.json"
+# [EN] Read the device address from the profile so cron cannot silently drift to an obsolete serial. / [CN] 从配置档读取设备地址，避免 cron 静默使用已过期的序列号。
+ADB_SERIAL="${ADB_SERIAL:-$(sed -n 's/^[[:space:]]*address[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${PROFILE_FILE}" | head -n1)}"
 ADB="/usr/bin/adb"
 DOCKER="/usr/bin/docker"
+JQ="/usr/bin/jq"
 LOG="${ROOT}/maa-cron.log"
 FAILED=0
 # [EN] Share one lock with update jobs so MaaCore resources are never replaced while a task is running. / [CN] 与更新任务共用同一把锁，避免任务运行时替换 MaaCore 资源。
@@ -599,7 +616,157 @@ select_infrast_task() {
   return 0
 }
 
+get_cache_age_days() {
+  local cache_path="$1"
+  local age="999"
+
+  if [ -f "${cache_path}" ]; then
+    age="$(python3 -c '
+import json
+import sys
+from datetime import datetime
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    timestamp = json.load(stream).get("timestamp", "")
+parsed = datetime.fromisoformat(timestamp)
+print(max(0, (datetime.now(tz=parsed.tzinfo) - parsed).days))
+' "${cache_path}" 2>/dev/null)" || age="999"
+  fi
+
+  if ! [[ "${age}" =~ ^[0-9]+$ ]]; then
+    age="999"
+  fi
+  printf "%s\n" "${age}"
+}
+
+scan_inventory_if_stale() {
+  local task_name="$1"
+  local kind="$2"
+  local cache_path="$3"
+  local interval_days="$4"
+  local age=""
+  local raw_output=""
+  local rc=0
+
+  age="$(get_cache_age_days "${cache_path}")"
+  if [ "${age}" -lt "${interval_days}" ]; then
+    echo "$(timestamp) ${kind} cache fresh (${age} days < ${interval_days}), skip scan" >>"${LOG}"
+    return 0
+  fi
+
+  echo "$(timestamp) ${kind} cache stale (${age} days >= ${interval_days}), scanning" >>"${LOG}"
+  raw_output="$(mktemp "${TMPDIR:-/tmp}/maa_${kind}.XXXXXX")"
+  set +e
+  run_maa_with_timeout "${DEFAULT_STEP_TIMEOUT}" run "${task_name}" -a "${ADB_SERIAL}" --batch -v >"${raw_output}" 2>&1
+  rc=$?
+  set -e
+  cat "${raw_output}" >>"${LOG}"
+  echo "$(timestamp) maa ${kind} scan end rc=${rc}" >>"${LOG}"
+  if [ "${rc}" -eq 0 ]; then
+    python3 "${ROOT}/scripts/extract_maa_inventory.py" "${kind}" "${raw_output}" "${cache_path}" \
+      2>>"${LOG}" || echo "$(timestamp) ${kind} scan: no completed inventory callback parsed" >>"${LOG}"
+  fi
+  rm -f "${raw_output}"
+  return 0
+}
+
+run_auto_copilot() {
+  local activity_output=""
+  local plan_json=""
+  local event_id=""
+  local stage_key=""
+  local stage_code=""
+  local job_id=""
+  local container_file=""
+  local raid_mode="normal"
+  local rc=0
+
+  if [ "${ENABLE_AUTO_COPILOT}" != "true" ]; then
+    return 0
+  fi
+  if [ ! -x "${JQ}" ] || [ ! -f "${ACTIVITY_MANIFEST}" ]; then
+    echo "$(timestamp) auto-copilot skipped: jq or activity manifest missing" >>"${LOG}"
+    return 0
+  fi
+
+  activity_output="$(mktemp "${TMPDIR:-/tmp}/maa_activity.XXXXXX")"
+  set +e
+  run_maa activity --batch "${FIGHT_ACTIVITY_CLIENT}" >"${activity_output}" 2>&1
+  rc=$?
+  set -e
+  cat "${activity_output}" >>"${LOG}"
+  if [ "${rc}" -ne 0 ]; then
+    echo "$(timestamp) auto-copilot activity query failed rc=${rc}" >>"${LOG}"
+    rm -f "${activity_output}"
+    return 0
+  fi
+
+  set +e
+  plan_json="$(python3 "${ROOT}/scripts/maa_auto_copilot.py" plan \
+    --activity-file "${activity_output}" \
+    --activity-manifest "${ACTIVITY_MANIFEST}" \
+    --operbox-cache "${OPERBOX_CACHE}" \
+    --state "${AUTO_COPILOT_STATE}" \
+    --download-dir "${AUTO_COPILOT_DOWNLOAD_DIR}" \
+    --container-download-dir "${AUTO_COPILOT_CONTAINER_DIR}" \
+    --client "${FIGHT_ACTIVITY_CLIENT}" \
+    --scope "${AUTO_COPILOT_SCOPE}" \
+    --ex-delay-days "${AUTO_COPILOT_EX_DELAY_DAYS}" \
+    --s-delay-days "${AUTO_COPILOT_S_DELAY_DAYS}" 2>>"${LOG}")"
+  rc=$?
+  set -e
+  rm -f "${activity_output}"
+  if [ "${rc}" -ne 0 ]; then
+    echo "$(timestamp) auto-copilot planner failed rc=${rc}" >>"${LOG}"
+    return 0
+  fi
+  if [ -z "${plan_json}" ]; then
+    echo "$(timestamp) auto-copilot: no pending eligible event stage" >>"${LOG}"
+    return 0
+  fi
+
+  set +e
+  event_id="$(printf "%s\n" "${plan_json}" | "${JQ}" -er '.event_id')"
+  stage_key="$(printf "%s\n" "${plan_json}" | "${JQ}" -er '.stage_key')"
+  stage_code="$(printf "%s\n" "${plan_json}" | "${JQ}" -er '.stage_code')"
+  job_id="$(printf "%s\n" "${plan_json}" | "${JQ}" -er '.job_id')"
+  container_file="$(printf "%s\n" "${plan_json}" | "${JQ}" -er '.container_file')"
+  raid_mode="$(printf "%s\n" "${plan_json}" | "${JQ}" -er 'if .raid then "raid" else "normal" end')"
+  rc=$?
+  set -e
+  if [ "${rc}" -ne 0 ] || [ -z "${event_id}" ] || [ -z "${stage_key}" ] || \
+    [ -z "${stage_code}" ] || [ -z "${job_id}" ] || [ -z "${container_file}" ]; then
+    echo "$(timestamp) auto-copilot planner returned invalid JSON" >>"${LOG}"
+    return 0
+  fi
+
+  echo "$(timestamp) auto-copilot selected stage=${stage_code} raid=${raid_mode} job=${job_id}" >>"${LOG}"
+  set +e
+  run_step_soft "maa copilot ${stage_code} job=${job_id}" \
+    run_maa_with_timeout "${FIGHT_TIMEOUT}" copilot "${container_file}" \
+    --raid "${raid_mode}" --formation --formation-index "${AUTO_COPILOT_FORMATION_INDEX}" \
+    --support-unit-usage 1 -a "${ADB_SERIAL}" --batch
+  rc=$?
+  set -e
+
+  if [ "${rc}" -eq 0 ]; then
+    python3 "${ROOT}/scripts/maa_auto_copilot.py" success --state "${AUTO_COPILOT_STATE}" \
+      --event-id "${event_id}" --stage-key "${stage_key}" --job-id "${job_id}" >>"${LOG}" 2>&1 || FAILED=1
+    echo "$(timestamp) auto-copilot completed stage=${stage_code} raid=${raid_mode} job=${job_id}" >>"${LOG}"
+  else
+    python3 "${ROOT}/scripts/maa_auto_copilot.py" failure --state "${AUTO_COPILOT_STATE}" \
+      --event-id "${event_id}" --stage-key "${stage_key}" --job-id "${job_id}" >>"${LOG}" 2>&1 || true
+    FAILED=1
+    echo "$(timestamp) auto-copilot failed stage=${stage_code} raid=${raid_mode} job=${job_id} rc=${rc}" >>"${LOG}"
+  fi
+  return 0
+}
+
 # Make sure adb daemon is ready.
+if [ -z "${ADB_SERIAL}" ]; then
+  echo "$(timestamp) adb device address missing in ${PROFILE_FILE}" >>"${LOG}"
+  exit 2
+fi
 ${ADB} start-server >/dev/null 2>&1 || true
 
 state="$(${ADB} -s "${ADB_SERIAL}" get-state 2>/dev/null || true)"
@@ -660,54 +827,18 @@ fi
 # If dry-run check fails, still force custom task instead of fallback.
 select_infrast_task
 
-# [EN] Execution order: startup -> depot?(if stale) -> infrast -> award -> recruit -> mall -> annihilation?(Mon/Tue) -> fight -> closedown. / [CN] 执行顺序：启动 -> 仓库扫描?(过期才跑) -> 基建 -> 奖励 -> 公招 -> 信用 -> 剿灭?(周一/二) -> 刷图 -> 关闭。
+# [EN] Execution order: startup -> inventory scans?(if stale) -> infrast -> award -> recruit -> mall -> annihilation?(Mon/Tue) -> event copilot? -> fight -> closedown. / [CN] 执行顺序：启动 -> 库存扫描?(过期才跑) -> 基建 -> 奖励 -> 公招 -> 信用 -> 剿灭?(周一/二) -> 活动抄作业? -> 刷图 -> 关闭。
 run_step "maa run startup_no_launch" 1 run_maa_with_timeout "${STARTUP_TIMEOUT}" run startup_no_launch -a "${ADB_SERIAL}" --batch
 
-# [EN] Scan depot if cache is older than DEPOT_SCAN_INTERVAL_DAYS. / [CN] 仓库缓存超过指定天数则重新扫描。
-if [ -f "${DEPOT_CACHE}" ]; then
-  cache_ts="$(python3 -c "
-import json, datetime
-with open('${DEPOT_CACHE}') as f:
-    c = json.load(f)
-print(c.get('timestamp',''))
-" 2>/dev/null)" || cache_ts=""
-  if [ -n "${cache_ts}" ]; then
-    cache_age_days="$(python3 -c "
-from datetime import datetime, timezone
-ts = datetime.fromisoformat('${cache_ts}')
-age = (datetime.now(tz=ts.tzinfo) - ts).days
-print(age)
-" 2>/dev/null)" || cache_age_days="999"
-  else
-    cache_age_days="999"
-  fi
-else
-  cache_age_days="999"
-fi
-
-if [ "${cache_age_days:-999}" -ge "${DEPOT_SCAN_INTERVAL_DAYS}" ]; then
-  echo "$(timestamp) depot cache stale (${cache_age_days:-N/A} days >= ${DEPOT_SCAN_INTERVAL_DAYS}), scanning..." >>"${LOG}"
-  depot_raw="${TMPDIR:-/tmp}/maa_depot_$$.txt"
-  set +e
-  run_maa_with_timeout "${DEFAULT_STEP_TIMEOUT}" run depot -a "${ADB_SERIAL}" --batch -v >"${depot_raw}" 2>&1
-  depot_rc=$?
-  set -e
-  cat "${depot_raw}" >>"${LOG}"
-  echo "$(timestamp) maa depot scan end rc=${depot_rc}" >>"${LOG}"
-  if [ "${depot_rc}" -eq 0 ]; then
-    python3 "${ROOT}/scripts/extract_maa_inventory.py" depot "${depot_raw}" "${DEPOT_CACHE}" \
-      2>>"${LOG}" || echo "$(timestamp) depot scan: no completed inventory callback parsed" >>"${LOG}"
-  fi
-  rm -f "${depot_raw}"
-else
-  echo "$(timestamp) depot cache fresh (${cache_age_days} days < ${DEPOT_SCAN_INTERVAL_DAYS}), skip scan" >>"${LOG}"
-fi
+scan_inventory_if_stale depot depot "${DEPOT_CACHE}" "${DEPOT_SCAN_INTERVAL_DAYS}"
+scan_inventory_if_stale operbox operbox "${OPERBOX_CACHE}" "${OPERBOX_SCAN_INTERVAL_DAYS}"
 
 run_step "maa run ${INFRAST_TASK_NAME}" 0 run_maa run "${INFRAST_TASK_NAME}" -a "${ADB_SERIAL}" --batch
 run_step "maa run award" 0 run_maa run award -a "${ADB_SERIAL}" --batch
 run_step "maa run recruit" 0 run_maa run recruit -a "${ADB_SERIAL}" --batch
 run_step "maa run mall" 0 run_maa run mall -a "${ADB_SERIAL}" --batch
 run_weekly_annihilation
+run_auto_copilot
 resolve_fight_stage
 run_fight_with_fallback
 
