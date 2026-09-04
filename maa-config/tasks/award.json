@@ -6,9 +6,9 @@
         "award": true,
         "mail": true,
         "recruit": false,
-        "orundum": false,
-        "mining": false,
-        "specialaccess": false
+        "orundum": true,
+        "mining": true,
+        "specialaccess": true
       }
     }
   ]

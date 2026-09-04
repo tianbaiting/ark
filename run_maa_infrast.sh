@@ -9,6 +9,10 @@ exec 0</dev/null
 FIGHT_STAGE="${FIGHT_STAGE:-auto}"
 FIGHT_ACTIVITY_CLIENT="${FIGHT_ACTIVITY_CLIENT:-Official}"
 FIGHT_AUTO_FALLBACK_STAGE="${FIGHT_AUTO_FALLBACK_STAGE:-AP-5}"
+# [EN] Run weekly annihilation before normal farming on the first two CN-server weekdays. / [CN] 国服每周前两天先跑剿灭，再进行普通刷图。
+ENABLE_ANNIHILATION="${ENABLE_ANNIHILATION:-true}"
+ANNIHILATION_WEEKDAYS="${ANNIHILATION_WEEKDAYS:-1,2}"
+CLIENT_TIME_ZONE="${CLIENT_TIME_ZONE:-Asia/Shanghai}"
 
 # 基建排班 JSON（放在仓库根目录）。
 INFRAST_PLAN_FILE="${INFRAST_PLAN_FILE:-243_4times_tbt20251104_noskip.json}"
@@ -524,6 +528,37 @@ resolve_fight_stage() {
   return 0
 }
 
+should_run_annihilation() {
+  local client_weekday=""
+  local client_hour=""
+
+  if [ "${ENABLE_ANNIHILATION}" != "true" ]; then
+    return 1
+  fi
+
+  client_weekday="$(TZ="${CLIENT_TIME_ZONE}" date +%u)"
+  client_hour="$(TZ="${CLIENT_TIME_ZONE}" date +%H)"
+  if [ "${client_hour#0}" -lt 4 ]; then
+    return 1
+  fi
+
+  case ",${ANNIHILATION_WEEKDAYS}," in
+  *,"${client_weekday}",*) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+run_weekly_annihilation() {
+  if ! should_run_annihilation; then
+    return 0
+  fi
+
+  # [EN] Repeated Monday/Tuesday attempts finish the weekly quota even when one run starts with little sanity. / [CN] 周一、周二重复尝试，即使某次开始时理智不足也能补齐周常额度。
+  run_step "maa fight Annihilation" 0 \
+    run_maa_with_timeout "${FIGHT_TIMEOUT}" fight Annihilation -a "${ADB_SERIAL}" \
+    --times 6 --expiring-medicine 99 --series 0 --batch
+}
+
 # Validate that the effective infrast task really points to the expected custom shift file.
 verify_infrast_plan() {
   local expected="/root/.config/maa/infrast/${INFRAST_PLAN_FILE}"
@@ -625,7 +660,7 @@ fi
 # If dry-run check fails, still force custom task instead of fallback.
 select_infrast_task
 
-# [EN] Execution order: startup -> depot?(if stale) -> infrast -> award -> recruit -> mall -> fight -> closedown. / [CN] 执行顺序：启动 -> 仓库扫描?(过期才跑) -> 基建 -> 奖励 -> 公招 -> 信用 -> 刷图 -> 关闭。
+# [EN] Execution order: startup -> depot?(if stale) -> infrast -> award -> recruit -> mall -> annihilation?(Mon/Tue) -> fight -> closedown. / [CN] 执行顺序：启动 -> 仓库扫描?(过期才跑) -> 基建 -> 奖励 -> 公招 -> 信用 -> 剿灭?(周一/二) -> 刷图 -> 关闭。
 run_step "maa run startup_no_launch" 1 run_maa_with_timeout "${STARTUP_TIMEOUT}" run startup_no_launch -a "${ADB_SERIAL}" --batch
 
 # [EN] Scan depot if cache is older than DEPOT_SCAN_INTERVAL_DAYS. / [CN] 仓库缓存超过指定天数则重新扫描。
@@ -700,6 +735,7 @@ run_step "maa run ${INFRAST_TASK_NAME}" 0 run_maa run "${INFRAST_TASK_NAME}" -a 
 run_step "maa run award" 0 run_maa run award -a "${ADB_SERIAL}" --batch
 run_step "maa run recruit" 0 run_maa run recruit -a "${ADB_SERIAL}" --batch
 run_step "maa run mall" 0 run_maa run mall -a "${ADB_SERIAL}" --batch
+run_weekly_annihilation
 resolve_fight_stage
 run_fight_with_fallback
 

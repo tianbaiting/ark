@@ -3,13 +3,13 @@
     {
       "type": "Recruit",
       "params": {
-        "refresh": false,
-        "select": [4],
-        "confirm": [4, 3],
+        "refresh": true,
+        "select": [6, 5, 4, 1],
+        "confirm": [6, 5, 4, 3, 1],
         "times": 4,
         "set_time": true,
         "expedite": false,
-        "skip_robot": true,
+        "preserve_tags": [],
         "server": "CN"
       }
     }
