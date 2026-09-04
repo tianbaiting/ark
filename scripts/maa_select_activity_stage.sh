@@ -9,7 +9,8 @@ awk_stage_codes='
   gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
 
   lowered = tolower($0)
-  if (line != "" && ($0 ~ /搓玉|合成玉/ || lowered ~ /orundum/)) {
+  pending = ($0 ~ /待定/ || lowered ~ /pending|tbd/)
+  if (line != "" && !pending && ($0 ~ /搓玉|合成玉/ || lowered ~ /orundum/)) {
     orundum = line
   }
   if (line != "" && line ~ /^[A-Z]+-[0-9]+$/) {

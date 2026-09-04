@@ -51,6 +51,13 @@ assert_selects "MT-10" 'Opening side story stages:
   - MT-9: 研磨石
   - MT-8: 酮凝集组'
 
+assert_selects "SR-8" 'Opening side story stages:
+- SideStory「月行水上」
+  - SR-8: 异铁组
+  - SR-7: 化合切削液
+  - SR-6: 褐素纤维
+  - SR-5: 搓玉效率待定'
+
 assert_no_selection 'Opening mini games:
 - AT-相谈室'
 
