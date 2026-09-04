@@ -49,7 +49,9 @@ OPERBOX_CACHE="${ROOT}/operbox_cache.json"
 AUTO_COPILOT_STATE="${ROOT}/auto_copilot_state.json"
 AUTO_COPILOT_DOWNLOAD_DIR="${ROOT}/maa-cache/auto-copilot"
 AUTO_COPILOT_CONTAINER_DIR="/root/.cache/maa/auto-copilot"
+AUTO_COPILOT_RESULT_VERIFIER="${ROOT}/scripts/verify_maa_copilot_result.py"
 ACTIVITY_MANIFEST="${ROOT}/maa-cache/StageActivityV2.json"
+TESSERACT="${TESSERACT:-/home/linuxbrew/.linuxbrew/bin/tesseract}"
 # [EN] Read the device address from the profile so cron cannot silently drift to an obsolete serial. / [CN] 从配置档读取设备地址，避免 cron 静默使用已过期的序列号。
 ADB_SERIAL="${ADB_SERIAL:-$(sed -n 's/^[[:space:]]*address[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${PROFILE_FILE}" | head -n1)}"
 ADB="/usr/bin/adb"
@@ -682,6 +684,7 @@ run_auto_copilot() {
   local container_file=""
   local raid_mode="normal"
   local rc=0
+  local verify_rc=0
 
   if [ "${ENABLE_AUTO_COPILOT}" != "true" ]; then
     return 0
@@ -752,14 +755,25 @@ run_auto_copilot() {
   set -e
 
   if [ "${rc}" -eq 0 ]; then
+    set +e
+    run_step_soft "verify maa copilot ${stage_code}" \
+      python3 "${AUTO_COPILOT_RESULT_VERIFIER}" --adb "${ADB}" --serial "${ADB_SERIAL}" \
+      --tesseract "${TESSERACT}"
+    verify_rc=$?
+    set -e
+  else
+    verify_rc="${rc}"
+  fi
+
+  if [ "${rc}" -eq 0 ] && [ "${verify_rc}" -eq 0 ]; then
     python3 "${ROOT}/scripts/maa_auto_copilot.py" success --state "${AUTO_COPILOT_STATE}" \
       --event-id "${event_id}" --stage-key "${stage_key}" --job-id "${job_id}" >>"${LOG}" 2>&1 || FAILED=1
-    echo "$(timestamp) auto-copilot completed stage=${stage_code} raid=${raid_mode} job=${job_id}" >>"${LOG}"
+    echo "$(timestamp) auto-copilot verified stage=${stage_code} raid=${raid_mode} job=${job_id}" >>"${LOG}"
   else
     python3 "${ROOT}/scripts/maa_auto_copilot.py" failure --state "${AUTO_COPILOT_STATE}" \
       --event-id "${event_id}" --stage-key "${stage_key}" --job-id "${job_id}" >>"${LOG}" 2>&1 || true
     FAILED=1
-    echo "$(timestamp) auto-copilot failed stage=${stage_code} raid=${raid_mode} job=${job_id} rc=${rc}" >>"${LOG}"
+    echo "$(timestamp) auto-copilot failed stage=${stage_code} raid=${raid_mode} job=${job_id} rc=${rc} verify_rc=${verify_rc}" >>"${LOG}"
   fi
   return 0
 }
